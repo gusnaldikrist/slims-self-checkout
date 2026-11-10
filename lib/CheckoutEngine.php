@@ -608,7 +608,7 @@ class CheckoutEngine
             );
 
             $stmtMeta = $this->db->prepare(
-                "SELECT b.title, b.biblio_id,
+                "SELECT b.title, b.biblio_id, i.coll_type_id, b.gmd_id,
                         IF(i.call_number IS NULL OR i.call_number = '', b.call_number, i.call_number) as call_number,
                         b.classification, g.gmd_name, l.language_name, loc.location_name, ct.coll_type_name
                  FROM item i
@@ -618,6 +618,10 @@ class CheckoutEngine
                  LEFT JOIN mst_location loc ON i.location_id = loc.location_id
                  LEFT JOIN mst_coll_type ct ON i.coll_type_id = ct.coll_type_id
                  WHERE i.item_code = :code"
+            );
+
+            $stmtCheckHist = $this->db->prepare(
+                "SELECT 1 FROM loan_history WHERE loan_id = :lid"
             );
 
             $stmtInsertHistory = $this->db->prepare(
@@ -636,10 +640,62 @@ class CheckoutEngine
             );
 
             foreach ($items as $item) {
-                $itemCode = trim($item['item_code']);
-                $loanDate = $item['loan_date'] ?? $today;
-                $dueDate = $item['due_date'] ?? $today;
-                $loanRulesId = (int)($item['loan_rules_id'] ?? 0);
+                if (is_array($item)) {
+                    $itemCode = trim($item['item_code'] ?? ($item['code'] ?? ''));
+                    $loanDate = !empty($item['loan_date']) ? $item['loan_date'] : $today;
+                    $dueDate = !empty($item['due_date']) ? $item['due_date'] : '';
+                    $loanRulesId = (int)($item['loan_rules_id'] ?? 0);
+                    $title = $item['title'] ?? '';
+                } else {
+                    $itemCode = trim((string)$item);
+                    $loanDate = $today;
+                    $dueDate = '';
+                    $loanRulesId = 0;
+                    $title = '';
+                }
+
+                if (empty($itemCode)) {
+                    continue;
+                }
+
+                // Ambil metadata untuk item & bibliografi
+                $stmtMeta->execute([':code' => $itemCode]);
+                $meta = $stmtMeta->fetch(PDO::FETCH_ASSOC);
+
+                if (!$meta) {
+                    throw new Exception("Buku dengan kode '$itemCode' tidak ditemukan dalam katalog.");
+                }
+
+                if (empty($title) && !empty($meta['title'])) {
+                    $title = $meta['title'];
+                }
+
+                // Jika due_date atau loan_rules_id belum dihitung, hitung otomatis dari aturan pinjam
+                if (empty($dueDate) || $loanRulesId === 0) {
+                    $stmtRules = $this->db->prepare(
+                        "SELECT lr.loan_rules_id, lr.loan_periode
+                         FROM mst_loan_rules lr
+                         WHERE lr.member_type_id = :mtid
+                           AND (lr.coll_type_id = :coll OR lr.coll_type_id = 0)
+                           AND (lr.gmd_id = :gmd OR lr.gmd_id = 0)
+                         ORDER BY lr.coll_type_id DESC, lr.gmd_id DESC
+                         LIMIT 1"
+                    );
+                    $stmtRules->execute([
+                        ':mtid' => (int)($member['member_type_id'] ?? 0),
+                        ':coll' => (int)($meta['coll_type_id'] ?? 0),
+                        ':gmd' => (int)($meta['gmd_id'] ?? 0)
+                    ]);
+                    $rule = $stmtRules->fetch(PDO::FETCH_ASSOC);
+
+                    $loanPeriod = $rule ? (int)$rule['loan_periode'] : (int)($member['loan_periode'] ?? 7);
+                    if ($loanRulesId === 0) {
+                        $loanRulesId = $rule ? (int)$rule['loan_rules_id'] : 0;
+                    }
+                    if (empty($dueDate)) {
+                        $dueDate = $this->calculateDueDate($loanPeriod, $loanDate, $member['expire_date'] ?? '');
+                    }
+                }
 
                 // Insert ke tabel loan
                 $stmtInsertLoan->execute([
@@ -655,30 +711,33 @@ class CheckoutEngine
 
                 $loanId = (int)$this->db->lastInsertId();
 
-                // Ambil metadata untuk loan_history
-                $stmtMeta->execute([':code' => $itemCode]);
-                $meta = $stmtMeta->fetch(PDO::FETCH_ASSOC);
-
-                if ($meta) {
-                    $stmtInsertHistory->execute([
-                        ':loan_id' => $loanId,
-                        ':item_code' => $itemCode,
-                        ':biblio_id' => (int)$meta['biblio_id'],
-                        ':title' => $meta['title'] ?? '',
-                        ':call_number' => $meta['call_number'] ?? '',
-                        ':classification' => $meta['classification'] ?? '',
-                        ':gmd_name' => $meta['gmd_name'] ?? '',
-                        ':language_name' => $meta['language_name'] ?? '',
-                        ':location_name' => $meta['location_name'] ?? '',
-                        ':collection_type_name' => $meta['coll_type_name'] ?? '',
-                        ':member_id' => $member['member_id'],
-                        ':member_name' => $member['member_name'],
-                        ':member_type_name' => $member['member_type_name'] ?? '',
-                        ':loan_date' => $loanDate,
-                        ':due_date' => $dueDate,
-                        ':input_date' => $now,
-                        ':last_update' => $now
-                    ]);
+                // Trigger SLiMS insert_loan_history otomatis mengisi loan_history jika ada.
+                // Jalankan fallback manual insert hanya jika loan_history belum terisi.
+                try {
+                    $stmtCheckHist->execute([':lid' => $loanId]);
+                    if (!$stmtCheckHist->fetchColumn()) {
+                        $stmtInsertHistory->execute([
+                            ':loan_id' => $loanId,
+                            ':item_code' => $itemCode,
+                            ':biblio_id' => (int)$meta['biblio_id'],
+                            ':title' => $meta['title'] ?? '',
+                            ':call_number' => $meta['call_number'] ?? '',
+                            ':classification' => $meta['classification'] ?? '',
+                            ':gmd_name' => $meta['gmd_name'] ?? '',
+                            ':language_name' => $meta['language_name'] ?? '',
+                            ':location_name' => $meta['location_name'] ?? '',
+                            ':collection_type_name' => $meta['coll_type_name'] ?? '',
+                            ':member_id' => $member['member_id'],
+                            ':member_name' => $member['member_name'],
+                            ':member_type_name' => $member['member_type_name'] ?? '',
+                            ':loan_date' => $loanDate,
+                            ':due_date' => $dueDate,
+                            ':input_date' => $now,
+                            ':last_update' => $now
+                        ]);
+                    }
+                } catch (\Throwable $histEx) {
+                    // Abaikan duplicate key jika trigger sudah mengisi
                 }
 
                 // Hapus reservasi jika ada
@@ -687,7 +746,7 @@ class CheckoutEngine
                 $borrowedResults[] = [
                     'loan_id' => $loanId,
                     'item_code' => $itemCode,
-                    'title' => $meta['title'] ?? ($item['title'] ?? $itemCode),
+                    'title' => $title ?: $itemCode,
                     'due_date' => $dueDate
                 ];
             }
@@ -705,8 +764,10 @@ class CheckoutEngine
                 ],
                 'loans' => $borrowedResults
             ];
-        } catch (Exception $e) {
-            $this->db->rollBack();
+        } catch (\Throwable $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             return [
                 'status' => false,
                 'message' => 'Gagal memproses peminjaman: ' . $e->getMessage()

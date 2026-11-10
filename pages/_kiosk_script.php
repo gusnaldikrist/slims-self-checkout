@@ -214,7 +214,9 @@ defined('INDEX_AUTH') || die('Direct access not allowed!');
                 format: 'dd/mm/yyyy',
                 autohide: true,
                 language: 'id',
-                todayHighlight: true
+                todayHighlight: true,
+                showOnFocus: false,
+                updateOnBlur: false
             });
 
             if (btnToggle) {
@@ -225,24 +227,35 @@ defined('INDEX_AUTH') || die('Direct access not allowed!');
             }
         }
 
-        // Masking / auto-separator saat mengetik angka tanggal (misal ketik 01012000 -> 01/01/2000)
+        // Auto-masking cerdas saat mengetik tanggal lahir (mencegah dobel slash dan terpotong di karakter ke-9)
         if (txtBirthDate) {
             txtBirthDate.addEventListener('input', function(e) {
-                let val = this.value;
-                val = val.replace(/[^\d\/\-]/g, '');
-
                 const isDelete = e.inputType && e.inputType.startsWith('delete');
-                if (!isDelete) {
-                    const digitsOnly = val.replace(/\D/g, '');
-                    if (!val.includes('/') && !val.includes('-')) {
-                        if (digitsOnly.length >= 2 && digitsOnly.length < 4) {
-                            val = digitsOnly.slice(0, 2) + '/' + digitsOnly.slice(2);
-                        } else if (digitsOnly.length >= 4) {
-                            val = digitsOnly.slice(0, 2) + '/' + digitsOnly.slice(2, 4) + '/' + digitsOnly.slice(4, 8);
-                        }
-                    }
+                if (isDelete) return; // Keleluasaan penuh saat menghapus (backspace/delete)
+
+                const currentVal = this.value;
+                const digits = currentVal.replace(/\D/g, '').slice(0, 8); // Maksimal 8 digit (DDMMYYYY)
+                if (digits.length === 0) {
+                    this.value = '';
+                    return;
                 }
-                this.value = val;
+
+                let formatted = '';
+                if (digits.length <= 2) {
+                    formatted = digits;
+                    if (currentVal.endsWith('/') || digits.length === 2) {
+                        formatted += '/';
+                    }
+                } else if (digits.length <= 4) {
+                    formatted = digits.slice(0, 2) + '/' + digits.slice(2);
+                    if (currentVal.endsWith('/') || digits.length === 4) {
+                        formatted += '/';
+                    }
+                } else {
+                    formatted = digits.slice(0, 2) + '/' + digits.slice(2, 4) + '/' + digits.slice(4, 8);
+                }
+
+                this.value = formatted;
             });
         }
     });
@@ -262,6 +275,20 @@ defined('INDEX_AUTH') || die('Direct access not allowed!');
         if (!bDate || !/^\d{4}-\d{2}-\d{2}$/.test(bDate)) {
             AudioSynth.playError();
             alertMsg.textContent = 'Format tanggal lahir tidak valid. Masukkan format HH/BB/TTTT (misal: 01/01/2000) atau pilih dari kalender.';
+            alertBox.classList.remove('d-none');
+            return;
+        }
+
+        // Validasi kewajaran tanggal (hari 1-31, bulan 1-12, tahun realistis)
+        const dateParts = bDate.split('-');
+        const yNum = parseInt(dateParts[0], 10);
+        const mNum = parseInt(dateParts[1], 10);
+        const dNum = parseInt(dateParts[2], 10);
+        const currentYear = new Date().getFullYear();
+
+        if (yNum < 1920 || yNum > currentYear || mNum < 1 || mNum > 12 || dNum < 1 || dNum > 31) {
+            AudioSynth.playError();
+            alertMsg.textContent = 'Tanggal lahir tidak masuk akal. Periksa kembali tanggal, bulan, atau tahun yang Anda masukkan.';
             alertBox.classList.remove('d-none');
             return;
         }
@@ -592,27 +619,41 @@ defined('INDEX_AUTH') || die('Direct access not allowed!');
         const emptyNotice = document.getElementById('cartEmptyNotice');
         const badgeCount = document.getElementById('badgeCartCount');
         const btnSubmit = document.getElementById('btnSubmitCheckout');
-        const btnSubmitText = document.getElementById('btnSubmitCheckoutText');
+        let btnSubmitText = document.getElementById('btnSubmitCheckoutText');
         const remainingQuotaEl = document.getElementById('lblRemainingQuota');
 
+        if (!tbody) return;
+
+        // Pastikan struktur span teks tombol ada jika sebelumnya tertimpa spinner
+        if (btnSubmit && !btnSubmitText) {
+            btnSubmit.innerHTML = '<i class="fas fa-check-circle mr-2"></i> <span id="btnSubmitCheckoutText"></span>';
+            btnSubmitText = document.getElementById('btnSubmitCheckoutText');
+        }
+
         tbody.innerHTML = '';
-        badgeCount.textContent = cartList.length;
+        if (badgeCount) badgeCount.textContent = cartList.length;
         const badgeNavCart = document.getElementById('badgeNavCartCount');
         if (badgeNavCart) badgeNavCart.textContent = cartList.length;
 
-        const remaining = Math.max(0, activeMember.remaining_quota - cartList.length);
-        remainingQuotaEl.textContent = remaining;
+        if (activeMember && remainingQuotaEl) {
+            const remaining = Math.max(0, activeMember.remaining_quota - cartList.length);
+            remainingQuotaEl.textContent = remaining;
+        }
 
         if (cartList.length === 0) {
-            emptyNotice.classList.remove('d-none');
-            btnSubmit.disabled = true;
-            btnSubmitText.textContent = 'Selesaikan Peminjaman (0 Buku)';
+            if (emptyNotice) emptyNotice.classList.remove('d-none');
+            if (btnSubmit) {
+                btnSubmit.disabled = true;
+                btnSubmit.innerHTML = '<i class="fas fa-check-circle mr-2"></i> <span id="btnSubmitCheckoutText">Selesaikan Peminjaman (0 Buku)</span>';
+            }
             return;
         }
 
-        emptyNotice.classList.add('d-none');
-        btnSubmit.disabled = false;
-        btnSubmitText.textContent = `Selesaikan Peminjaman (${cartList.length} Buku)`;
+        if (emptyNotice) emptyNotice.classList.add('d-none');
+        if (btnSubmit) {
+            btnSubmit.disabled = false;
+            btnSubmit.innerHTML = `<i class="fas fa-check-circle mr-2"></i> <span id="btnSubmitCheckoutText">Selesaikan Peminjaman (${cartList.length} Buku)</span>`;
+        }
 
         cartList.forEach((item, idx) => {
             const tr = document.createElement('tr');
@@ -651,22 +692,39 @@ defined('INDEX_AUTH') || die('Direct access not allowed!');
 
         restartWatchdog();
         const btnFinish = document.getElementById('btnSubmitCheckout');
-        btnFinish.disabled = true;
-        btnFinish.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Menyimpan transaksi...';
+        if (btnFinish) {
+            btnFinish.disabled = true;
+            btnFinish.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> <span id="btnSubmitCheckoutText">Menyimpan transaksi...</span>';
+        }
 
         try {
             const codes = cartList.map(i => i.item_code);
+            const payloadItems = cartList.map(i => ({
+                item_code: i.item_code,
+                title: i.title || '',
+                due_date: i.due_date || '',
+                loan_date: i.loan_date || '',
+                loan_rules_id: i.loan_rules_id || 0
+            }));
+
             const response = await fetch(`${API_ENDPOINT}&action=checkout`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: new URLSearchParams({
                     member_id: activeMember.member_id,
                     item_codes: JSON.stringify(codes),
-                    items: JSON.stringify(codes)
+                    items: JSON.stringify(payloadItems)
                 })
             });
 
-            const res = await response.json();
+            const textResponse = await response.text();
+            let res;
+            try {
+                res = JSON.parse(textResponse);
+            } catch (jsonErr) {
+                console.error('Non-JSON response:', textResponse);
+                throw new Error('Respon server tidak valid (bukan JSON murni).');
+            }
 
             if (res.status === true) {
                 AudioSynth.playSuccess();
@@ -676,13 +734,17 @@ defined('INDEX_AUTH') || die('Direct access not allowed!');
             } else {
                 AudioSynth.playError();
                 triggerToast(res.message || 'Gagal menyimpan transaksi peminjaman.', 'error');
-                btnFinish.disabled = false;
+                if (btnFinish) {
+                    btnFinish.disabled = false;
+                }
                 renderCartItems();
             }
         } catch (err) {
             AudioSynth.playError();
             triggerToast('Kesalahan server: ' + err.message, 'error');
-            btnFinish.disabled = false;
+            if (btnFinish) {
+                btnFinish.disabled = false;
+            }
             renderCartItems();
         }
     }

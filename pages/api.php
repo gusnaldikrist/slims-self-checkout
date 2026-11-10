@@ -12,8 +12,24 @@ defined('INDEX_AUTH') || die(json_encode(['status' => false, 'message' => 'Direc
 while (ob_get_level()) {
     ob_end_clean();
 }
+ob_start();
 
-header('Content-Type: application/json; charset=utf-8');
+/**
+ * Output helper untuk memastikan respon selalu JSON murni tanpa tercampur warning/notice HTML
+ */
+function sendJsonResponse(array $data, int $httpCode = 200): void
+{
+    if (ob_get_level()) {
+        $dirtyOutput = ob_get_clean();
+        if (!empty(trim($dirtyOutput))) {
+            error_log("SLiMS Self-Checkout API buffer output: " . $dirtyOutput);
+        }
+    }
+    http_response_code($httpCode);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($data, JSON_UNESCAPED_UNICODE);
+    exit;
+}
 
 require_once __DIR__ . '/../lib/CheckoutEngine.php';
 
@@ -21,13 +37,11 @@ use SLiMS\Plugins\SelfCheckout\CheckoutEngine;
 
 try {
     $engine = new CheckoutEngine();
-} catch (Exception $e) {
-    http_response_code(500);
-    echo json_encode([
+} catch (\Throwable $e) {
+    sendJsonResponse([
         'status' => false,
         'message' => 'Gagal menginisialisasi sistem: ' . $e->getMessage()
-    ]);
-    exit;
+    ], 500);
 }
 
 // Baca input (Mendukung application/json dan form-data / x-www-form-urlencoded)
@@ -49,11 +63,10 @@ switch ($action) {
         $birthDate = trim($inputData['birth_date'] ?? '');
 
         if (empty($memberId) || empty($birthDate)) {
-            echo json_encode([
+            sendJsonResponse([
                 'status' => false,
                 'message' => 'ID Anggota dan Tanggal Lahir wajib diisi.'
             ]);
-            exit;
         }
 
         $result = $engine->authenticateMember($memberId, $birthDate);
@@ -62,7 +75,7 @@ switch ($action) {
             $result['data'] = $memberData;
             $result['member'] = $memberData;
         }
-        echo json_encode($result);
+        sendJsonResponse($result);
         break;
 
     case 'scan_item':
@@ -79,19 +92,17 @@ switch ($action) {
         }
 
         if (empty($itemCode)) {
-            echo json_encode([
+            sendJsonResponse([
                 'status' => false,
                 'message' => 'Silakan scan atau masukkan barcode eksemplar.'
             ]);
-            exit;
         }
 
         if (empty($memberId)) {
-            echo json_encode([
+            sendJsonResponse([
                 'status' => false,
                 'message' => 'Sesi anggota tidak ditemukan. Silakan login kembali.'
             ]);
-            exit;
         }
 
         $result = $engine->validateAndScanItem($itemCode, $memberId, $cart);
@@ -100,7 +111,7 @@ switch ($action) {
             $result['data'] = $itemData;
             $result['item'] = $itemData;
         }
-        echo json_encode($result);
+        sendJsonResponse($result);
         break;
 
     case 'checkout':
@@ -116,19 +127,17 @@ switch ($action) {
         }
 
         if (empty($memberId)) {
-            echo json_encode([
+            sendJsonResponse([
                 'status' => false,
                 'message' => 'Sesi anggota tidak valid. Silakan login kembali.'
             ]);
-            exit;
         }
 
         if (empty($items) || !is_array($items)) {
-            echo json_encode([
+            sendJsonResponse([
                 'status' => false,
                 'message' => 'Tidak ada buku dalam daftar peminjaman.'
             ]);
-            exit;
         }
 
         $result = $engine->processCheckout($memberId, $items);
@@ -136,22 +145,21 @@ switch ($action) {
             $loansList = $result['loans'] ?? ($result['data']['items'] ?? []);
             $result['loans'] = $loansList;
         }
-        echo json_encode($result);
+        sendJsonResponse($result);
         break;
 
     case 'get_active_loans':
     case 'active_loans':
         $memberId = trim($inputData['member_id'] ?? ($_GET['member_id'] ?? ''));
         if (empty($memberId)) {
-            echo json_encode([
+            sendJsonResponse([
                 'status' => false,
                 'message' => 'ID Anggota wajib disertakan.'
             ]);
-            exit;
         }
 
         $result = $engine->getActiveLoans($memberId);
-        echo json_encode($result);
+        sendJsonResponse($result);
         break;
 
     case 'renew_loan':
@@ -160,30 +168,28 @@ switch ($action) {
         $itemCode = trim($inputData['item_code'] ?? '');
 
         if (empty($memberId) || empty($itemCode)) {
-            echo json_encode([
+            sendJsonResponse([
                 'status' => false,
                 'message' => 'ID Anggota dan Kode Eksemplar wajib diisi untuk perpanjangan.'
             ]);
-            exit;
         }
 
         $result = $engine->renewLoan($memberId, $itemCode);
-        echo json_encode($result);
+        sendJsonResponse($result);
         break;
 
     case 'cancel':
-        echo json_encode([
+        sendJsonResponse([
             'status' => true,
             'message' => 'Sesi transaksi peminjaman mandiri berhasil dibatalkan.'
         ]);
         break;
 
     default:
-        http_response_code(400);
-        echo json_encode([
+        sendJsonResponse([
             'status' => false,
             'message' => 'Aksi "' . htmlspecialchars($action) . '" tidak dikenal.'
-        ]);
+        ], 400);
         break;
 }
 exit;

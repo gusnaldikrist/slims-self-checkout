@@ -216,12 +216,32 @@ defined('INDEX_AUTH') || die('Direct access not allowed!');
                 language: 'id',
                 todayHighlight: true,
                 showOnFocus: false,
+                showOnClick: false,
                 updateOnBlur: false
+            });
+
+            // Proteksi teks input agar tidak pernah di-reset oleh unfocus / hide datepicker saat klik di luar
+            function preserveInputVal() {
+                if (txtBirthDate.dataset.lastVal && txtBirthDate.value !== txtBirthDate.dataset.lastVal) {
+                    txtBirthDate.value = txtBirthDate.dataset.lastVal;
+                }
+            }
+            txtBirthDate.addEventListener('blur', preserveInputVal);
+            txtBirthDate.addEventListener('hide', preserveInputVal);
+
+            // Sinkronkan data saat pemustaka memilih tanggal di kalender
+            txtBirthDate.addEventListener('changeDate', function() {
+                this.dataset.lastVal = this.value;
             });
 
             if (btnToggle) {
                 btnToggle.addEventListener('click', (e) => {
                     e.preventDefault();
+                    if (txtBirthDate.value && txtBirthDate.value.length === 10) {
+                        try {
+                            birthDatePicker.setDate(txtBirthDate.value, { render: false });
+                        } catch (_) {}
+                    }
                     birthDatePicker.show();
                 });
             }
@@ -231,12 +251,16 @@ defined('INDEX_AUTH') || die('Direct access not allowed!');
         if (txtBirthDate) {
             txtBirthDate.addEventListener('input', function(e) {
                 const isDelete = e.inputType && e.inputType.startsWith('delete');
-                if (isDelete) return; // Keleluasaan penuh saat menghapus (backspace/delete)
+                if (isDelete) {
+                    this.dataset.lastVal = this.value;
+                    return; // Keleluasaan penuh saat menghapus (backspace/delete)
+                }
 
                 const currentVal = this.value;
                 const digits = currentVal.replace(/\D/g, '').slice(0, 8); // Maksimal 8 digit (DDMMYYYY)
                 if (digits.length === 0) {
                     this.value = '';
+                    this.dataset.lastVal = '';
                     return;
                 }
 
@@ -256,6 +280,14 @@ defined('INDEX_AUTH') || die('Direct access not allowed!');
                 }
 
                 this.value = formatted;
+                this.dataset.lastVal = formatted;
+
+                // Sinkronkan ke datepicker jika format sudah lengkap 10 karakter (DD/MM/YYYY)
+                if (birthDatePicker && formatted.length === 10) {
+                    try {
+                        birthDatePicker.setDate(formatted, { render: false });
+                    } catch (_) {}
+                }
             });
         }
     });

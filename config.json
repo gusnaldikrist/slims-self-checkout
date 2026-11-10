@@ -1,0 +1,6 @@
+{
+    "kiosk_title": "Peminjaman Mandiri Perpustakaan",
+    "staff_uid": 1,
+    "inactivity_timeout": 90,
+    "success_timeout": 10
+}

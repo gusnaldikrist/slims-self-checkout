@@ -9,7 +9,7 @@ Anjungan berjalan otomatis, aman, dan tanpa kertas (*paperless*), sehingga pemus
 ## ✅ Telah Diuji Pada (Work Tested On)
 
 Plugin ini telah diuji dan berfungsi dengan baik pada:
-* **Aplikasi**: SLiMS 9 Bulian (v9.4.0 ke atas, teruji di SLiMS 9.6.1 / 9.8.0)
+* **Aplikasi**: SLiMS 9.8 Bulian DAce
 * **Perangkat**: PC Desktop, Mini PC, Layar Sentuh (*Touchscreen*), dan Laptop
 * **Pemindai Barcode**: Scanner USB & Wireless (Mode HID / Keyboard)
 
